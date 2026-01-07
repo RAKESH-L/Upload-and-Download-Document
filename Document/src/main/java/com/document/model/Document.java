@@ -56,6 +56,5 @@ public class Document {
 //    @Column(length = 10485760) // Specify the length based on your needs (e.g., 10 MB in bytes)
 //    private byte[] content;
     
-
 	
 }
