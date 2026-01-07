@@ -16,6 +16,9 @@ import org.springframework.web.multipart.MultipartFile;
 import com.document.model.Document;
 import com.document.service.DocumentService;
 
+//FIX: Added security import
+import org.springframework.security.access.prepost.PreAuthorize; //FIX: For method-level security
+
 @RestController
 @RequestMapping("/api/document")
 public class DocumentController {
@@ -24,6 +27,7 @@ public class DocumentController {
     private DocumentService documentService;
 	
 	@PostMapping("/upload")
+    @PreAuthorize("isAuthenticated()") //FIX: Restrict upload to authenticated users
     public String uploadDocument(
     		@RequestParam("name") String name,
     		@RequestParam("file") MultipartFile file) {
@@ -36,6 +40,7 @@ public class DocumentController {
     }
 	
 	@GetMapping("/d/{documentId}")
+    @PreAuthorize("isAuthenticated()") //FIX: Restrict download to authenticated users
     public ResponseEntity<Resource> downloadFile(@PathVariable Long documentId) throws IOException {
         return documentService.downloadFile(documentId);
     }
