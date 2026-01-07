@@ -7,27 +7,28 @@ import java.nio.file.Paths;
 import java.util.Optional;
 import java.nio.file.Files;
 
-import java.io.FileNotFoundException;
 import org.springframework.util.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.http.ResponseEntity;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
-import org.springframework.core.io.InputStreamResource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.document.model.Document;
 import com.document.repository.DocumentRepository;
 
 @Service
 public class DocumentService {
-	
-	@Value("${upload.directory}")  // Make sure to define this property in your application.properties or application.yml
+    //FIX: Added logger for secure logging instead of System.out
+    private static final Logger logger = LoggerFactory.getLogger(DocumentService.class);
+
+    @Value("${upload.directory}")  // Make sure to define this property in your application.properties or application.yml
     private String uploadDirectory;
 
     private final DocumentRepository documentRepository;
@@ -38,94 +39,67 @@ public class DocumentService {
     }
 
     public void uploadFile(MultipartFile file, String name) throws IOException {
+        //FIX: Clean and validate file name to prevent path traversal
         String fileName = StringUtils.cleanPath(file.getOriginalFilename());
-        String filePath = uploadDirectory + "/" + fileName;
-
-        // Ensure the upload directory exists
-        File directory = new File(uploadDirectory);
-        if (!directory.exists()) {
-            directory.mkdirs(); // Create the directory if it doesn't exist
+        //FIX: Prevent directory traversal attacks
+        if (fileName.contains("..")) {
+            throw new IOException("Invalid file path");
         }
-
-        // Save the file to the specified directory
-        Path fullPath = Paths.get(uploadDirectory, fileName);
+        //FIX: Use Path API for secure path joining
+        Path uploadPath = Paths.get(uploadDirectory);
+        //FIX: Use Files API for directory creation
+        if (!Files.exists(uploadPath)) {
+            Files.createDirectories(uploadPath);
+        }
+        //FIX: Use Path API for file path
+        Path fullPath = uploadPath.resolve(fileName);
         file.transferTo(fullPath.toFile());
 
-     // Check if a Document with the same name already exists
+        // Check if a Document with the same name already exists
         Optional<Document> existingDocument = documentRepository.findByName(name);
         if (existingDocument.isPresent()) {
-            // Update the existing Document's file path
             Document documentToUpdate = existingDocument.get();
-            documentToUpdate.setFilePath(filePath);
+            //FIX: Store canonical path
+            documentToUpdate.setFilePath(fullPath.toString());
             documentRepository.save(documentToUpdate);
         } else {
-            // Save a new Document
             Document newDocument = new Document();
             newDocument.setName(name);
-            newDocument.setFilePath(filePath);
+            //FIX: Store canonical path
+            newDocument.setFilePath(fullPath.toString());
             documentRepository.save(newDocument);
         }
     }
-    
-    
+
     public ResponseEntity<Resource> downloadFile(Long documentId) {
-        try {
-            Optional<Document> optionalDocument = documentRepository.findById(documentId);
-            System.out.println("opd"+optionalDocument);
-
-            if (optionalDocument.isPresent()) {
-                Document document = optionalDocument.get();
-                System.out.println("d"+document);
-
-                String filePath = document.getFilePath();
-                System.out.println("fp"+filePath);
-
-                Resource resource = new UrlResource(Paths.get(filePath).toUri());
-                System.out.println("r"+resource);
-
-                if (resource.exists()) {
+        //FIX: Removed verbose System.out and added logger
+        Optional<Document> optionalDocument = documentRepository.findById(documentId);
+        if (optionalDocument.isPresent()) {
+            Document document = optionalDocument.get();
+            //FIX: Use Path API for file path
+            Path filePath = Paths.get(document.getFilePath());
+            try {
+                //FIX: Check resource is readable
+                Resource resource = new UrlResource(filePath.toUri());
+                if (resource.exists() && resource.isReadable()) {
                     HttpHeaders headers = new HttpHeaders();
-                    System.out.println("h"+headers);
                     headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=" + resource.getFilename());
-                 // Set a custom message in the response headers
                     headers.add("File-Downloaded", "File downloaded");
-                    
-                    System.out.println("h2"+headers);
-                    System.out.println("done");
                     return ResponseEntity.ok()
                             .headers(headers)
                             .contentType(MediaType.APPLICATION_OCTET_STREAM)
                             .body(resource);
                 } else {
-                    // Handle the case when the file doesn't exist
+                    logger.warn("File not found or not readable: {}", filePath);
                     return ResponseEntity.notFound().build();
                 }
-            } else {
-                // Handle the case when the document with the given ID is not found
-                return ResponseEntity.notFound().build();
+            } catch (IOException e) {
+                logger.error("Error downloading file: {}", filePath, e);
+                return ResponseEntity.status(500).build(); // Internal Server Error
             }
-        } catch (IOException e) {
-            // Log the exception
-            e.printStackTrace();
-            return ResponseEntity.status(500).build(); // Internal Server Error
+        } else {
+            logger.warn("Document not found with ID: {}", documentId);
+            return ResponseEntity.notFound().build();
         }
     }
-
-//	
-//	public Document saveDocument(String name, MultipartFile file) {
-//        try {
-//            Document document = new Document();
-//            document.setName(name);
-//            document.setContent(file.getBytes());
-//            return documentRepository.save(document);
-//        } catch (Exception e) {
-//            throw new RuntimeException("Failed to save document", e);
-//        }
-//    }
-//	
-//	public Document getDocument(Long id) {
-//        return documentRepository.findById(id)
-//                .orElseThrow(() -> new RuntimeException("Document not found"));
-//    }
-    
 }
