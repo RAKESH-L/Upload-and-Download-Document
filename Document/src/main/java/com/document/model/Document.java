@@ -9,6 +9,10 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Lob;
 
+//FIX: Added validation imports
+import jakarta.validation.constraints.NotBlank; //FIX: Added for input validation
+import jakarta.validation.constraints.Size; //FIX: Added for input validation
+
 @Entity
 public class Document {
 
@@ -16,7 +20,12 @@ public class Document {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @NotBlank(message = "Document name must not be blank") //FIX: Input validation for 'name'
+    @Size(min = 1, max = 255, message = "Document name must be between 1 and 255 characters") //FIX: Input validation for 'name' length
     private String name;
+
+    @NotBlank(message = "File path must not be blank") //FIX: Input validation for 'filePath' (proxy for content)
+    @Size(max = 1024, message = "File path must be at most 1024 characters") //FIX: Input validation for 'filePath' length
     private String filePath;
     
 	public Document(Long id, String name, String filePath) {
@@ -56,5 +65,6 @@ public class Document {
 //    @Column(length = 10485760) // Specify the length based on your needs (e.g., 10 MB in bytes)
 //    private byte[] content;
     
+
 	
 }
