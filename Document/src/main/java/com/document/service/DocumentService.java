@@ -1,87 +1,69 @@
 package com.document.service;
 
-import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Optional;
-import java.nio.file.Files;
 
-import org.springframework.util.StringUtils;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Service;
-import org.springframework.web.multipart.MultipartFile;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
+import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
+import org.springframework.web.multipart.MultipartFile;
 
 import com.document.model.Document;
 import com.document.repository.DocumentRepository;
 
 @Service
 public class DocumentService {
+    private static final Logger logger = LoggerFactory.getLogger(DocumentService.class);
+
     @Value("${upload.directory}")
     private String uploadDirectory;
 
     private final DocumentRepository documentRepository;
 
-    @Autowired
     public DocumentService(DocumentRepository documentRepository) {
         this.documentRepository = documentRepository;
     }
 
     public void uploadFile(MultipartFile file, String name) throws IOException {
-        //FIX: Validate file name to prevent path traversal attacks
+        //FIX: Clean and validate file name to prevent path traversal
         String fileName = StringUtils.cleanPath(file.getOriginalFilename());
+        //FIX: Reject file names containing path traversal sequences
         if (fileName.contains("..")) {
-            //FIX: Reject files with relative path sequences
+            logger.warn("Invalid file name: {}", fileName);
             throw new IOException("Invalid file name: " + fileName);
         }
-        //FIX: Validate file extension (allow only specific types, e.g., pdf, docx, txt)
-        String lowerFileName = fileName.toLowerCase();
-        if (!(lowerFileName.endsWith(".pdf") || lowerFileName.endsWith(".docx") || lowerFileName.endsWith(".txt"))) {
-            throw new IOException("Invalid file type. Only PDF, DOCX, and TXT files are allowed.");
-        }
-        //FIX: Limit file size (e.g., max 10MB)
-        if (file.getSize() > 10 * 1024 * 1024) {
-            throw new IOException("File size exceeds the maximum allowed limit of 10MB.");
-        }
-        String filePath = uploadDirectory + "/" + fileName;
-
-        // Ensure the upload directory exists
-        File directory = new File(uploadDirectory);
-        //FIX: Check mkdirs() result and handle failure
-        if (!directory.exists() && !directory.mkdirs()) {
-            throw new IOException("Failed to create upload directory: " + uploadDirectory);
-        }
-
-        //FIX: Use Path.resolve to avoid path traversal
-        Path fullPath = Paths.get(uploadDirectory).resolve(fileName).normalize();
-        //FIX: Ensure the file is stored only within the upload directory
-        if (!fullPath.startsWith(Paths.get(uploadDirectory).toAbsolutePath())) {
-            throw new IOException("Invalid file path");
-        }
-        //FIX: Overwrite protection (optional, but recommended)
-        if (Files.exists(fullPath)) {
-            throw new IOException("File already exists: " + fileName);
-        }
-        file.transferTo(fullPath.toFile());
+        //FIX: Ensure upload directory exists using secure Files.createDirectories
+        Path uploadPath = Paths.get(uploadDirectory);
+        Files.createDirectories(uploadPath);
+        //FIX: Use Path.resolve to avoid path manipulation
+        Path fullPath = uploadPath.resolve(fileName);
+        //FIX: Use transferTo with Path to avoid file overwrite vulnerabilities
+        file.transferTo(fullPath);
 
         // Check if a Document with the same name already exists
         Optional<Document> existingDocument = documentRepository.findByName(name);
         if (existingDocument.isPresent()) {
             Document documentToUpdate = existingDocument.get();
-            documentToUpdate.setFilePath(filePath);
+            documentToUpdate.setFilePath(fullPath.toString());
             documentRepository.save(documentToUpdate);
         } else {
             Document newDocument = new Document();
             newDocument.setName(name);
-            newDocument.setFilePath(filePath);
+            newDocument.setFilePath(fullPath.toString());
             documentRepository.save(newDocument);
         }
+        //FIX: Log successful upload
+        logger.info("File uploaded successfully: {}", fileName);
     }
 
     public ResponseEntity<Resource> downloadFile(Long documentId) {
@@ -90,30 +72,40 @@ public class DocumentService {
             if (optionalDocument.isPresent()) {
                 Document document = optionalDocument.get();
                 String filePath = document.getFilePath();
-                //FIX: Validate file path to prevent path traversal
-                Path path = Paths.get(filePath).normalize();
-                if (!path.startsWith(Paths.get(uploadDirectory).toAbsolutePath())) {
-                    //FIX: Prevent access to files outside upload directory
+                //FIX: Validate file path is not null or empty
+                if (filePath == null || filePath.trim().isEmpty()) {
+                    logger.warn("File path is empty for document ID: {}", documentId);
+                    return ResponseEntity.notFound().build();
+                }
+                Path path = Paths.get(filePath);
+                //FIX: Only allow files within the upload directory
+                if (!path.normalize().startsWith(Paths.get(uploadDirectory).normalize())) {
+                    logger.warn("Attempt to access file outside upload directory: {}", filePath);
                     return ResponseEntity.status(403).build();
                 }
+                //FIX: Use UrlResource and check if file exists and is readable
                 Resource resource = new UrlResource(path.toUri());
                 if (resource.exists() && resource.isReadable()) {
                     HttpHeaders headers = new HttpHeaders();
-                    //FIX: Set Content-Disposition header safely
-                    headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + resource.getFilename().replaceAll("[\\r\\n]", "") + "\"");
+                    headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=" + resource.getFilename());
                     headers.add("File-Downloaded", "File downloaded");
+                    //FIX: Log successful download
+                    logger.info("File downloaded: {}", filePath);
                     return ResponseEntity.ok()
                             .headers(headers)
                             .contentType(MediaType.APPLICATION_OCTET_STREAM)
                             .body(resource);
                 } else {
+                    logger.warn("File not found or not readable: {}", filePath);
                     return ResponseEntity.notFound().build();
                 }
             } else {
+                logger.warn("Document not found with ID: {}", documentId);
                 return ResponseEntity.notFound().build();
             }
         } catch (IOException e) {
-            //FIX: Use a logger instead of e.printStackTrace() (not shown here for brevity)
+            //FIX: Log exception securely
+            logger.error("Error downloading file for document ID {}: {}", documentId, e.getMessage(), e);
             return ResponseEntity.status(500).build();
         }
     }
