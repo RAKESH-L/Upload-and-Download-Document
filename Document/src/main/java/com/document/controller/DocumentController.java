@@ -13,54 +13,31 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
-import com.document.model.Document;
 import com.document.service.DocumentService;
-
-//FIX: Added security import
-import org.springframework.security.access.prepost.PreAuthorize; //FIX: For method-level security
 
 @RestController
 @RequestMapping("/api/document")
 public class DocumentController {
-
-	@Autowired
+    @Autowired
     private DocumentService documentService;
-	
-	@PostMapping("/upload")
-    @PreAuthorize("isAuthenticated()") //FIX: Restrict upload to authenticated users
-    public String uploadDocument(
-    		@RequestParam("name") String name,
-    		@RequestParam("file") MultipartFile file) {
+
+    @PostMapping("/upload")
+    public ResponseEntity<String> uploadDocument(@RequestParam("name") String name, @RequestParam("file") MultipartFile file) {
+        //FIX: Input validation for document name (prevent XSS, etc.)
+        if (name == null || name.trim().isEmpty() || !name.matches("^[a-zA-Z0-9_\- ]{1,100}$")) {
+            return ResponseEntity.badRequest().body("Invalid document name. Only alphanumeric, space, dash, and underscore allowed, max 100 chars.");
+        }
         try {
-        	documentService.uploadFile(file, name);
-            return "File uploaded successfully!";
+            documentService.uploadFile(file, name);
+            return ResponseEntity.ok("File uploaded successfully!");
         } catch (Exception e) {
-            return "Failed to upload the file: " + e.getMessage();
+            //FIX: Do not expose internal error details to the client
+            return ResponseEntity.status(500).body("Failed to upload the file.");
         }
     }
-	
-	@GetMapping("/d/{documentId}")
-    @PreAuthorize("isAuthenticated()") //FIX: Restrict download to authenticated users
-    public ResponseEntity<Resource> downloadFile(@PathVariable Long documentId) throws IOException {
+
+    @GetMapping("/d/{documentId}")
+    public ResponseEntity<Resource> downloadFile(@PathVariable Long documentId) {
         return documentService.downloadFile(documentId);
     }
-
-//    @PostMapping("/upload")
-//    public ResponseEntity<Document> uploadDocument(
-//            @RequestParam("name") String name,
-//            @RequestParam("file") MultipartFile file) {
-//
-//        Document savedDocument = documentService.saveDocument(name, file);
-//
-//        return ResponseEntity.ok(savedDocument);
-//    }
-    
-//    @GetMapping("/{id}")
-//    public ResponseEntity<byte[]> downloadDocument(@PathVariable Long id) {
-//        Document document = documentService.getDocument(id);
-//
-//        return ResponseEntity.ok()
-//                .header("Content-Disposition", "attachment; filename=" + document.getName())
-//                .body(document.getContent());
-//    }
 }
