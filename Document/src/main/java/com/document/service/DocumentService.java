@@ -7,7 +7,6 @@ import java.nio.file.Paths;
 import java.util.Optional;
 import java.nio.file.Files;
 
-import java.io.FileNotFoundException;
 import org.springframework.util.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -24,8 +23,7 @@ import com.document.repository.DocumentRepository;
 
 @Service
 public class DocumentService {
-    
-    @Value("${upload.directory}")  // Make sure to define this property in your application.properties or application.yml
+    @Value("${upload.directory}")
     private String uploadDirectory;
 
     private final DocumentRepository documentRepository;
@@ -38,69 +36,70 @@ public class DocumentService {
     public void uploadFile(MultipartFile file, String name) throws IOException {
         //FIX: Validate file name to prevent path traversal attacks
         String fileName = StringUtils.cleanPath(file.getOriginalFilename());
-        if (fileName.contains("..") || fileName.contains("/")) {
-            //FIX: Throw exception if file name is invalid
-            throw new IOException("Invalid file name");
+        if (fileName.contains("..")) {
+            //FIX: Reject files with relative path sequences
+            throw new IOException("Invalid file name: " + fileName);
         }
-        //FIX: Validate file is not empty
-        if (file.isEmpty()) {
-            throw new IOException("File is empty");
+        //FIX: Validate file extension (allow only specific types, e.g., pdf, docx, txt)
+        String lowerFileName = fileName.toLowerCase();
+        if (!(lowerFileName.endsWith(".pdf") || lowerFileName.endsWith(".docx") || lowerFileName.endsWith(".txt"))) {
+            throw new IOException("Invalid file type. Only PDF, DOCX, and TXT files are allowed.");
         }
-        //FIX: Limit file size (example: max 10MB)
+        //FIX: Limit file size (e.g., max 10MB)
         if (file.getSize() > 10 * 1024 * 1024) {
-            throw new IOException("File size exceeds limit");
+            throw new IOException("File size exceeds the maximum allowed limit of 10MB.");
         }
-        //FIX: Only allow certain file types (example: pdf, txt, docx)
-        String allowedExtensions = "pdf,txt,docx";
-        String ext = fileName.lastIndexOf('.') > 0 ? fileName.substring(fileName.lastIndexOf('.') + 1).toLowerCase() : "";
-        if (!allowedExtensions.contains(ext)) {
-            throw new IOException("File type not allowed");
+        String filePath = uploadDirectory + "/" + fileName;
+
+        // Ensure the upload directory exists
+        File directory = new File(uploadDirectory);
+        //FIX: Check mkdirs() result and handle failure
+        if (!directory.exists() && !directory.mkdirs()) {
+            throw new IOException("Failed to create upload directory: " + uploadDirectory);
         }
-        //FIX: Use Path API to resolve file path safely
-        Path uploadDirPath = Paths.get(uploadDirectory).normalize();
-        Path fullPath = uploadDirPath.resolve(fileName).normalize();
-        if (!fullPath.startsWith(uploadDirPath)) {
-            //FIX: Prevent path traversal
+
+        //FIX: Use Path.resolve to avoid path traversal
+        Path fullPath = Paths.get(uploadDirectory).resolve(fileName).normalize();
+        //FIX: Ensure the file is stored only within the upload directory
+        if (!fullPath.startsWith(Paths.get(uploadDirectory).toAbsolutePath())) {
             throw new IOException("Invalid file path");
         }
-        // Ensure the upload directory exists
-        Files.createDirectories(uploadDirPath); //FIX: Use Files.createDirectories for atomic directory creation
-        // Save the file to the specified directory
+        //FIX: Overwrite protection (optional, but recommended)
+        if (Files.exists(fullPath)) {
+            throw new IOException("File already exists: " + fileName);
+        }
         file.transferTo(fullPath.toFile());
-        String filePath = fullPath.toString();
+
         // Check if a Document with the same name already exists
         Optional<Document> existingDocument = documentRepository.findByName(name);
         if (existingDocument.isPresent()) {
-            // Update the existing Document's file path
             Document documentToUpdate = existingDocument.get();
             documentToUpdate.setFilePath(filePath);
             documentRepository.save(documentToUpdate);
         } else {
-            // Save a new Document
             Document newDocument = new Document();
             newDocument.setName(name);
             newDocument.setFilePath(filePath);
             documentRepository.save(newDocument);
         }
     }
-    
+
     public ResponseEntity<Resource> downloadFile(Long documentId) {
         try {
             Optional<Document> optionalDocument = documentRepository.findById(documentId);
-            //FIX: Remove debug prints and avoid leaking internal info
             if (optionalDocument.isPresent()) {
                 Document document = optionalDocument.get();
                 String filePath = document.getFilePath();
                 //FIX: Validate file path to prevent path traversal
-                Path uploadDirPath = Paths.get(uploadDirectory).normalize();
-                Path resolvedPath = Paths.get(filePath).normalize();
-                if (!resolvedPath.startsWith(uploadDirPath)) {
-                    return ResponseEntity.status(403).build(); // Forbidden
+                Path path = Paths.get(filePath).normalize();
+                if (!path.startsWith(Paths.get(uploadDirectory).toAbsolutePath())) {
+                    //FIX: Prevent access to files outside upload directory
+                    return ResponseEntity.status(403).build();
                 }
-                Resource resource = new UrlResource(resolvedPath.toUri());
+                Resource resource = new UrlResource(path.toUri());
                 if (resource.exists() && resource.isReadable()) {
                     HttpHeaders headers = new HttpHeaders();
-                    //FIX: Set Content-Disposition header safely with quotes
+                    //FIX: Set Content-Disposition header safely
                     headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + resource.getFilename().replaceAll("[\\r\\n]", "") + "\"");
                     headers.add("File-Downloaded", "File downloaded");
                     return ResponseEntity.ok()
@@ -108,16 +107,14 @@ public class DocumentService {
                             .contentType(MediaType.APPLICATION_OCTET_STREAM)
                             .body(resource);
                 } else {
-                    // Handle the case when the file doesn't exist
                     return ResponseEntity.notFound().build();
                 }
             } else {
-                // Handle the case when the document with the given ID is not found
                 return ResponseEntity.notFound().build();
             }
         } catch (IOException e) {
-            //FIX: Do not print stack trace, log securely (logging omitted for brevity)
-            return ResponseEntity.status(500).build(); // Internal Server Error
+            //FIX: Use a logger instead of e.printStackTrace() (not shown here for brevity)
+            return ResponseEntity.status(500).build();
         }
     }
 }
